@@ -7,7 +7,8 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.ScoreboardApp"
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +20,15 @@
     "web": {
       "favicon": "./assets/icon.png"
     },
-    "plugins": [],
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许记分板访问您的相册来设置队伍背景图"
+        }
+      ],
+      "expo-sharing"
+    ],
     "extra": {
       "eas": {
         "projectId": "f59940a3-8fb4-468f-be6c-ef3771f8e7ce"

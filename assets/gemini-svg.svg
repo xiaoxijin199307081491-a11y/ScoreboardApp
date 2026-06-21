@@ -1,0 +1,38 @@
+<svg width="512" height="512" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a5f" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="line-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#CBD5E1" />
+    </linearGradient>
+    <style>
+      .score-text {
+        font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+        font-weight: 800;
+        font-size: 42px;
+        letter-spacing: -2px;
+      }
+    </style>
+  </defs>
+
+  <!-- 圆角方形背景 -->
+  <rect width="200" height="200" rx="44" fill="url(#bg-grad)" />
+
+  <!-- 左侧记分牌 -->
+  <rect x="42" y="60" width="46" height="80" rx="10"
+        fill="none" stroke="url(#line-grad)" stroke-width="5" stroke-linejoin="round"/>
+  <!-- 右侧记分牌 -->
+  <rect x="112" y="60" width="46" height="80" rx="10"
+        fill="none" stroke="url(#line-grad)" stroke-width="5" stroke-linejoin="round"/>
+
+  <!-- 比分数 -->
+  <text x="65" y="113" text-anchor="middle" class="score-text" fill="url(#line-grad)">2</text>
+  <text x="135" y="113" text-anchor="middle" class="score-text" fill="url(#line-grad)">2</text>
+
+  <!-- 中间分隔圆点（居中、聚焦） -->
+  <circle cx="100" cy="100" r="3" fill="url(#line-grad)"/>
+
+</svg>
