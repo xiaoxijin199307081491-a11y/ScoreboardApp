@@ -2,6 +2,14 @@
 
 一个简洁的双队记分牌 App，适用于篮球、乒乓球、羽毛球等各类对战计分场景。基于 [Expo](https://expo.dev) / React Native，**一套代码同时支持 Android 与 iOS**。
 
+## 📥 下载安装
+
+[![下载 APK](https://img.shields.io/github/v/release/xiaoxijin199307081491-a11y/ScoreboardApp?label=下载%20Android%20APK&style=for-the-badge&logo=android&color=3DDC84)](https://github.com/xiaoxijin199307081491-a11y/ScoreboardApp/releases/latest)
+
+**Android**：点击上方徽章，或前往 [Releases 页面](https://github.com/xiaoxijin199307081491-a11y/ScoreboardApp/releases/latest) 下载最新 `.apk`，在手机上打开并允许「安装未知来源应用」即可。
+
+**iOS**：受苹果平台限制，无法通过下载文件直接安装。如需 iOS 版本，请通过 App Store / TestFlight 获取（后续发布）。
+
 ## 功能
 
 - ⚖️ **双队计分** — 加分 / 减分，主队 / 客队独立计分
