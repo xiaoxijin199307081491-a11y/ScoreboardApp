@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-双队记分牌 App（应用名：记分板），支持双队计分、计时、胜负记录、历史战绩、截图分享。横竖屏自适应 + 全交互点震动反馈。通用对战计分工具（篮球/乒乓球/羽毛球等都用）。
+双队记分牌 App（应用名：记分板），支持双队计分、计时、胜负记录、历史战绩、截图分享、比分语音播报、自定义加分音效（录制/选文件）。横竖屏自适应 + 全交互点震动反馈。通用对战计分工具（篮球/乒乓球/羽毛球等都用）。
 
 ## 快速开始
 
@@ -58,12 +58,14 @@ eas build --platform android --profile preview --no-wait
 | **`expo-blur`** | **~56.0.3** | **Glassmorphism 毛玻璃 (4 维度第 2 层)** |
 | `expo-haptics` | ~56.0.3 | 震动反馈 |
 | `expo-speech` | ~56.0.x | 比分语音播报 (设备自带离线 TTS) |
+| **`expo-audio`** | **~56.0.12** | **自定义加分音效 录制 + 播放 (替代已禁用的 expo-av)** |
+| **`expo-document-picker`** | **~56.0.4** | **从手机里选已有音频文件作加分音效** |
 | `expo-image-picker` | ~56.0.15 | 队伍背景图选择 |
 | `expo-file-system` | ~56.0.7 | 背景图持久化 (class API) |
 | `expo-sharing` | ~56.0.15 | 系统分享面板 |
 | `react-native-view-shot` | 5.1.0 | React 组件截图 |
 | `@react-native-async-storage/async-storage` | 2.2.0 | 背景图路径 + 战绩存储 |
-| ~~`expo-av`~~ | - | 已禁用 (SDK 56 兼容性问题) |
+| ~~`expo-av`~~ | - | 已禁用 (SDK 56 闪退); 音频录制/播放改用 `expo-audio` |
 | ~~`@react-native-picker/picker`~~ | - | 从未引入 |
 
 ## 背景图持久化 (expo-file-system@56)
@@ -127,6 +129,50 @@ const h = {
 - 播报在 `addScore`/`subScore` 的 `setScores` updater 里用算出的 next 值触发（state 异步，不能用旧 `scores`）
 - 中间面板「设置时间」下方有 `voiceBtn` 开关：关=玻璃灰 🔇，开=iOS 系统绿 🔊；打开时读一次当前比分作确认，关闭时 `Speech.stop()`
 - 离线、无需联网，不增加 APK 体积里联网相关；用 `h.select()` 切换震动反馈
+
+## 自定义加分音效 (expo-audio + expo-document-picker)
+
+主队/客队各录/选一段声音，**加分 (+1) 时播放**（减分不播）。入口与背景图一致：中间面板「加分音效」区，主队/客队各一个按钮。
+
+**持久化**：完全复用背景图那套 (expo-file-system@56 class API)。
+
+- 目录 `SOUND_DIR = Paths.document.uri + 'team_sounds/'`，文件名 `sound_${side}_${Date.now()}.${ext}` 必带时间戳，路径存 AsyncStorage key `team_sound_left` / `team_sound_right`
+- 总开关持久化到 key `sound_on` ('1'/'0')，默认**关**
+- `saveSoundFromUri(side, uri, name)` 统一处理两种来源（录音临时文件 / DocumentPicker 结果）：`ensureSoundDir()` → `clearSavedSound()` 删旧 → `new File(src).copy(new File(dest))`
+- `pickSoundFile(side)` 用 `DocumentPicker.getDocumentAsync({ type: 'audio/*' })` 选已有音频
+
+**播放 (expo-audio imperative API)**：
+
+- `playersRef = useRef([null, null])` 每队预加载一个 `createAudioPlayer(uri)`，路径变化时 `loadPlayer(idx, uri)` 重建（旧的 `.remove()`）
+- `playTeamSound(idx, onDone?)`：`p.seekTo(0); p.play()` 支持连点重播；可选 `onDone` 通过一次性 `p.addListener('playbackStatusUpdate', s => s.didJustFinish)` 在音效自然播完时回调（监听挂在 `p._announceSub`，连点先 remove 旧的避免叠加）
+- 启动时恢复路径并 `loadPlayer`；组件卸载 `useEffect` 清理释放所有 player
+
+**录音弹窗 `SoundRecordModal`** (条件渲染, `recordSide` 控制显隐, 同 TimePickerModal)：
+
+- `useAudioRecorder(RecordingPresets.HIGH_QUALITY)` 在 App 顶层创建, 传进 modal
+- 状态机 `idle → recording → recorded`，录制中计时，**最长 10 秒自动停**（`SOUND_MAX_SEC`）
+- `startRec`: `AudioModule.requestRecordingPermissionsAsync()` → `setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true })` → `recorder.prepareToRecordAsync()` → `recorder.record()`
+- `doStop`: `recorder.stop()` 后 `recorder.uri` 即录音文件；**录完立刻 `setAudioModeAsync({ allowsRecording: false })`**，否则 iOS 试听/后续播放会从听筒走（很小声）
+- 试听用临时 `createAudioPlayer(tempUri)`；保存调 `saveSoundFromUri` 持久化
+- 卸载 `useEffect` 收尾：停录、清计时、释放试听 player、`allowsRecording:false`
+
+**音效 + 比分 TTS 编排（两者可同时开，但不重叠）**：
+
+`announceAdd(side, a, b)` 统一处理。**先放音效, 自然播完再报比分**（娱乐向：先听搞笑音效再报分）：
+
+```js
+const announceAdd = (side, a, b) => {
+  const hasSound = soundOn && playersRef.current[side];
+  const sayScore = () => { if (voiceOn) speakScore(a, b); };
+  if (hasSound) playTeamSound(side, voiceOn ? sayScore : undefined);
+  else sayScore();
+};
+```
+
+- 只开音效 → 只放音效；只开播报 → 直接报分；都开 → 串行（音效 `didJustFinish` 后才 TTS）
+- 减分 `subScore` 不放音效，只 TTS（保持原行为）
+
+**权限**：`RECORD_AUDIO` 已在 AndroidManifest 声明；`app.json` 的 `expo-audio` plugin 配了 `microphonePermission`（iOS NSMicrophoneUsageDescription）。
 
 ## 滚轮时间选择器 (DrumPicker)
 
@@ -349,6 +395,9 @@ expo 默认 splash 是**白色背景 + 灰色"篮球场"同心圆 logo** (`@draw
 - **HistoryPage 标题偏左 + × 关闭被状态栏遮挡**: 标题本来左对齐 (不居中), × 关闭在右上被状态栏/电池图标遮挡. 改为: 标题去掉 📊 emoji + `textAlign: 'center'` 居中, × 关闭按钮**移到标题下一行**独立显示, 加大点击区域 (paddingHorizontal: 12, paddingVertical: 6), 文字 "× 关闭" 更明显
 - **应用图标太满**: 旧版塞了 12+ 元素 (篮筐×2 / 罚球区×2 / 中线×4 / 圆点×2 / 数字×2), 没有焦点. 改为记分牌 2:2 风格: 2 个圆角矩形 + 中间圆点 + 2 个数字, 笔画 5, 字号 42, 留出 21% 边距
 - **启动瞬间白屏闪过 (expo 默认 splash 篮球场)**: 改 2 个文件 - `drawable/ic_launcher_background.xml` (删除 bitmap 层) + `values/styles.xml` (`Theme.App.SplashScreen.windowBackground` → `@color/iconBackground`), 让启动瞬间是纯深色而不是白色"篮球场"
+- **自定义加分音效 (录制/选文件)**: 装 `expo-audio` + `expo-document-picker`。持久化同背景图 (`SOUND_DIR` + `Date.now()` 时间戳 + AsyncStorage)。`playersRef` 每队预加载 `createAudioPlayer`，加分时 `playTeamSound(idx, onDone)` `seekTo(0)+play()`。录音用 `useAudioRecorder(RecordingPresets.HIGH_QUALITY)` + `SoundRecordModal`，最长 10s 自动停，录完 `setAudioModeAsync({allowsRecording:false})` 防 iOS 听筒小声。详见「自定义加分音效」章节
+- **音效和比分 TTS 同时开会糊在一起**: 用 `announceAdd` 编排成串行 —— 先 `playTeamSound(side, sayScore)`，音效 `playbackStatusUpdate.didJustFinish` 后才 `speakScore`。监听一次性挂 `p._announceSub`，连点先 remove 旧的。只开一个则直接播那个
+- **加了原生模块 (expo-audio 等) 后改 JS 没生效**: 原生模块需重新 gradle 构建 (`./gradlew assembleRelease`)，光重载 JS / 旧 APK 不带新模块。Expo autolinking 会自动识别 node_modules 里的新模块，**通常不用 prebuild**（prebuild 会覆盖 `screenOrientation` 等手改的原生配置）。`RECORD_AUDIO` 权限已在 manifest，无需重生成
 - **想换玻璃面板颜色 / 透明度**: 改 `App.js:24-58` 的 `GLASS` 常量 (4 维度集中定义), 不要零散改各组件。`glassFill` / `glassBorder` / 阴影参数是改全 UI 的最快方式
 - **玻璃面板没看到效果**: 检查 4 层结构是否完整 (暗色 / BlurView / 玻璃填充 / 1px 白边), 且 `overflow: 'hidden'` 必须设
 - **两侧面板用了 BlurView 后用户背景图看不见**: 故意不放 BlurView (怕盖住图片)。`ImageBackground` 已在底层, 加 `bgOverlay: 'rgba(0,0,0,0.48)'` 压暗足够
@@ -361,3 +410,4 @@ expo 默认 splash 是**白色背景 + 灰色"篮球场"同心圆 logo** (`@draw
 - 应用包名：`com.anonymous.ScoreboardApp`
 - 应用图标：记分牌 2:2 风格（深色背景 + 白色渐变 + 2 个圆角矩形 + 中间圆点 + 比分 2:2），源文件为 `assets/gemini-svg.svg`
 - UI 主题：Glassmorphism (苹果 4 维度)，集中定义在 `App.js:24-58` 的 `GLASS` 常量
+- 音频功能：比分语音播报 (`expo-speech` TTS) + 自定义加分音效 (`expo-audio` 录制/播放 + `expo-document-picker` 选文件)，两者可同时开且串行不重叠

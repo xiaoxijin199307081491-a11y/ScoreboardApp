@@ -6,9 +6,14 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { File, Directory, Paths } from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
+import {
+  createAudioPlayer, useAudioRecorder, RecordingPresets,
+  AudioModule, setAudioModeAsync,
+} from 'expo-audio';
 import * as Sharing from 'expo-sharing';
 import ViewShot from 'react-native-view-shot';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -163,8 +168,52 @@ async function clearSavedImage(side) {
   await AsyncStorage.removeItem(key);
 }
 
-// ─── Sound stub ───────────────────────────────────────────────
-function playSound() {}
+// ─── 队伍加分音效 (expo-audio 录制/播放 + expo-document-picker 选文件) ──
+// 持久化方式与背景图一致: 复制到 document 目录, 文件名带 Date.now() 时间戳, 路径存 AsyncStorage
+const SOUND_DIR              = Paths.document.uri + 'team_sounds/';
+const STORAGE_KEY_SOUND_LEFT  = 'team_sound_left';
+const STORAGE_KEY_SOUND_RIGHT = 'team_sound_right';
+const STORAGE_KEY_SOUND_ON    = 'sound_on';
+const SOUND_KEYS = [STORAGE_KEY_SOUND_LEFT, STORAGE_KEY_SOUND_RIGHT];
+
+async function ensureSoundDir() {
+  const dir = new Directory(SOUND_DIR);
+  if (!dir.exists) dir.create({ intermediates: true });
+}
+
+async function clearSavedSound(side) {
+  const idx  = side === 'left' ? 0 : 1;
+  const path = await AsyncStorage.getItem(SOUND_KEYS[idx]);
+  if (path) {
+    const file = new File(path);
+    if (file.exists) file.delete();
+  }
+  await AsyncStorage.removeItem(SOUND_KEYS[idx]);
+}
+
+// 把任意来源音频 (录音临时文件 / 文件选择器结果) 持久化到 SOUND_DIR, 返回新路径
+async function saveSoundFromUri(side, sourceUri, name) {
+  await ensureSoundDir();
+  await clearSavedSound(side);              // 先删旧文件, 避免残留
+  const src = new File(sourceUri);
+  let ext = src.extension || (name && name.includes('.') ? name.split('.').pop() : '') || 'm4a';
+  ext = ext.replace(/^\./, '');
+  const idx      = side === 'left' ? 0 : 1;
+  const destPath = SOUND_DIR + `sound_${side}_${Date.now()}.${ext}`;
+  await src.copy(new File(destPath));
+  await AsyncStorage.setItem(SOUND_KEYS[idx], destPath);
+  return destPath;
+}
+
+// 从手机里选已有音频文件
+async function pickSoundFile(side) {
+  const res = await DocumentPicker.getDocumentAsync({
+    type: 'audio/*',
+    copyToCacheDirectory: true,
+  });
+  if (res.canceled || !res.assets || !res.assets[0]) return null;
+  return saveSoundFromUri(side, res.assets[0].uri, res.assets[0].name);
+}
 
 // ─── DrumPicker (滚轮选择器) ──────────────────────────────────
 const DRUM_ITEM_HEIGHT = 44;
@@ -594,6 +643,125 @@ function BgImageBtn({ label, color, hasImage, onPress }) {
   );
 }
 
+// ─── 录音弹窗 (expo-audio useAudioRecorder) ───────────────────
+// 状态机: idle(未录) → recording(录制中, 最长 10s 自动停) → recorded(可试听/保存/重录)
+const SOUND_MAX_SEC = 10;
+function SoundRecordModal({ side, teamName, color, recorder, onSave, onClose }) {
+  const [phase,   setPhase]   = useState('idle');
+  const [elapsed, setElapsed] = useState(0);
+  const [tempUri, setTempUri] = useState(null);
+  const [saving,  setSaving]  = useState(false);
+  const tickRef    = useRef(null);
+  const previewRef = useRef(null);
+
+  const doStop = async () => {
+    clearInterval(tickRef.current);
+    tickRef.current = null;
+    try { await recorder.stop(); } catch {}
+    // 退出录音模式, 否则 iOS 试听/后续播放会从听筒走 (声音很小)
+    setAudioModeAsync({ allowsRecording: false }).catch(() => {});
+    setTempUri(recorder.uri);
+    setPhase('recorded');
+    h.success();
+  };
+
+  // 录制中到达上限自动停止
+  useEffect(() => {
+    if (phase === 'recording' && elapsed >= SOUND_MAX_SEC) doStop();
+  }, [elapsed, phase]);
+
+  // 卸载时收尾: 停录、清计时、释放试听 player、关闭录音模式
+  useEffect(() => () => {
+    clearInterval(tickRef.current);
+    try { recorder.stop(); } catch {}
+    try { previewRef.current?.remove(); } catch {}
+    setAudioModeAsync({ allowsRecording: false }).catch(() => {});
+  }, []);
+
+  const startRec = async () => {
+    const perm = await AudioModule.requestRecordingPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('需要麦克风权限', '请在系统设置中允许记分板访问麦克风');
+      return;
+    }
+    try {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setTempUri(null);
+      setElapsed(0);
+      setPhase('recording');
+      tickRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+      h.medium();
+    } catch (e) {
+      Alert.alert('录音失败', '无法开始录音，请重试');
+    }
+  };
+
+  const preview = () => {
+    if (!tempUri) return;
+    try { previewRef.current?.remove(); } catch {}
+    const p = createAudioPlayer(tempUri);
+    previewRef.current = p;
+    p.play();
+    h.select();
+  };
+
+  const save = async () => {
+    if (!tempUri || saving) return;
+    setSaving(true);
+    await onSave(tempUri);
+  };
+
+  return (
+    <Pressable style={styles.modalOverlay} onPress={onClose}>
+      <Pressable style={styles.recordCard} onPress={() => {}}>
+        <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: GLASS.glassFillDeep, borderRadius: 22 }]} pointerEvents="none" />
+        <View style={[StyleSheet.absoluteFill, { borderRadius: 22, borderWidth: 1, borderColor: GLASS.glassBorder }]} pointerEvents="none" />
+
+        <View style={styles.recordContent}>
+          <Text style={[styles.recordTitle, { color }]}>{teamName} · 加分音效</Text>
+
+          <Text style={styles.recordTimer}>
+            {phase === 'recording'
+              ? `● 录制中 ${elapsed}s / ${SOUND_MAX_SEC}s`
+              : phase === 'recorded'
+                ? '✓ 录制完成，可试听'
+                : '点下方按钮开始录制（最长 10 秒）'}
+          </Text>
+
+          {phase !== 'recording' && (
+            <Pressable onPress={startRec} style={[styles.recordBtn, styles.recordBtnStart]}>
+              <Text style={styles.recordBtnText}>{phase === 'recorded' ? '🎙 重新录制' : '🎙 开始录制'}</Text>
+            </Pressable>
+          )}
+          {phase === 'recording' && (
+            <Pressable onPress={doStop} style={[styles.recordBtn, styles.recordBtnStop]}>
+              <Text style={styles.recordBtnText}>⏹ 停止</Text>
+            </Pressable>
+          )}
+
+          {phase === 'recorded' && (
+            <View style={styles.recordRow}>
+              <Pressable onPress={preview} style={[styles.recordBtn, styles.recordBtnHalf, styles.recordBtnGlass]}>
+                <Text style={styles.recordBtnText}>▶ 试听</Text>
+              </Pressable>
+              <Pressable onPress={save} style={[styles.recordBtn, styles.recordBtnHalf, styles.recordBtnSave]}>
+                <Text style={styles.recordBtnText}>{saving ? '保存中…' : '保存'}</Text>
+              </Pressable>
+            </View>
+          )}
+
+          <Pressable onPress={onClose} style={styles.recordCancel} hitSlop={8}>
+            <Text style={styles.recordCancelText}>取消</Text>
+          </Pressable>
+        </View>
+      </Pressable>
+    </Pressable>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────
 export default function App() {
   const [teamNames,  setTeamNames]  = useState(['主队', '客队']);
@@ -606,6 +774,13 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [bgImages,   setBgImages]   = useState([null, null]);
   const [voiceOn,    setVoiceOn]    = useState(false);
+  // 自定义加分音效: 路径 [主队, 客队] + 总开关 + 当前录制的一侧 (null 时不显示录音弹窗)
+  const [teamSounds, setTeamSounds] = useState([null, null]);
+  const [soundOn,    setSoundOn]    = useState(false);
+  const [recordSide, setRecordSide] = useState(null);
+  // 每队预加载一个 AudioPlayer, 加分时 seek 到 0 立即重播 (支持连点)
+  const playersRef = useRef([null, null]);
+  const recorder   = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   // 中间面板 timerBox 实测高度, 供横屏时约束背景图高度使用
   const [centerH,    setCenterH]    = useState(0);
 
@@ -633,8 +808,25 @@ export default function App() {
       const [l, r] = await Promise.all([check(lp), check(rp)]);
       setBgImages([l, r]);
     })();
+    // 恢复自定义加分音效路径并预加载播放器
+    (async () => {
+      const [ls, rs] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEY_SOUND_LEFT),
+        AsyncStorage.getItem(STORAGE_KEY_SOUND_RIGHT),
+      ]);
+      const check = (p) => (p && new File(p).exists ? p : null);
+      const sounds = [check(ls), check(rs)];
+      sounds.forEach((uri, idx) => loadPlayer(idx, uri));
+      setTeamSounds(sounds);
+    })();
     loadHistory().then(setHistory);
     AsyncStorage.getItem(STORAGE_KEY_VOICE).then((v) => { if (v === '1') setVoiceOn(true); });
+    AsyncStorage.getItem(STORAGE_KEY_SOUND_ON).then((v) => { if (v === '1') setSoundOn(true); });
+  }, []);
+
+  // 卸载时释放所有播放器
+  useEffect(() => () => {
+    playersRef.current.forEach((p) => { try { p?.remove(); } catch {} });
   }, []);
 
   useEffect(() => {
@@ -648,12 +840,44 @@ export default function App() {
     return () => clearInterval(intervalRef.current);
   }, [running]);
 
+  // 预加载/释放某一侧的播放器 (路径变化时调用)
+  const loadPlayer = (idx, uri) => {
+    if (playersRef.current[idx]) { try { playersRef.current[idx].remove(); } catch {} }
+    playersRef.current[idx] = uri ? createAudioPlayer(uri) : null;
+  };
+
+  // 播放该队自定义音效 (seek 0 支持连点重播); onDone 在音效自然播完时回调一次
+  const playTeamSound = (idx, onDone) => {
+    const p = playersRef.current[idx];
+    if (!p) { onDone && onDone(); return; }
+    // 清掉上一次残留的一次性监听 (连点时避免叠加)
+    if (p._announceSub) { try { p._announceSub.remove(); } catch {} p._announceSub = null; }
+    if (onDone) {
+      p._announceSub = p.addListener('playbackStatusUpdate', (status) => {
+        if (status.didJustFinish) {
+          try { p._announceSub.remove(); } catch {}
+          p._announceSub = null;
+          onDone();
+        }
+      });
+    }
+    try { p.seekTo(0); p.play(); } catch { onDone && onDone(); }
+  };
+
+  // 加分时音效 + 比分播报: 两者都开则"先音效, 放完再报比分"(串行, 不重叠)
+  const announceAdd = (side, a, b) => {
+    const hasSound = soundOn && playersRef.current[side];
+    const sayScore = () => { if (voiceOn) speakScore(a, b); };
+    if (hasSound) playTeamSound(side, voiceOn ? sayScore : undefined);
+    else sayScore();
+  };
+
   // 计分 + 播报: 用新分数算出 "X比Y" 再读 (state 异步, 在 updater 里拿 next 值)
   const addScore = (side) =>
     setScores((s) => {
       const n = [...s];
       n[side]++;
-      if (voiceOn) speakScore(n[0], n[1]);
+      announceAdd(side, n[0], n[1]);
       return n;
     });
 
@@ -674,6 +898,58 @@ export default function App() {
       else Speech.stop();
       return next;
     });
+  };
+
+  const toggleSound = () => {
+    h.select();
+    setSoundOn((v) => {
+      const next = !v;
+      AsyncStorage.setItem(STORAGE_KEY_SOUND_ON, next ? '1' : '0');
+      return next;
+    });
+  };
+
+  // 点队伍音效按钮: 已有音效给 试听/重录/重选/移除, 没有则给 录制/选文件
+  const handleSoundBtn = (side) => {
+    const idx = side === 'left' ? 0 : 1;
+    const name = teamNames[idx];
+    const pickFile = async () => {
+      const uri = await pickSoundFile(side);
+      if (uri) {
+        setTeamSounds((prev) => { const n = [...prev]; n[idx] = uri; return n; });
+        loadPlayer(idx, uri);
+        h.success();
+      }
+    };
+    if (teamSounds[idx]) {
+      Alert.alert('加分音效', `${name}的加分音效`, [
+        { text: '试听',     onPress: () => playTeamSound(idx) },
+        { text: '重新录制', onPress: () => setRecordSide(side) },
+        { text: '从文件选择', onPress: pickFile },
+        { text: '移除', style: 'destructive', onPress: async () => {
+            await clearSavedSound(side);
+            setTeamSounds((prev) => { const n = [...prev]; n[idx] = null; return n; });
+            loadPlayer(idx, null);
+            h.light();
+          } },
+        { text: '取消', style: 'cancel' },
+      ]);
+    } else {
+      Alert.alert('加分音效', `为${name}添加加分音效`, [
+        { text: '录制', onPress: () => setRecordSide(side) },
+        { text: '从文件选择', onPress: pickFile },
+        { text: '取消', style: 'cancel' },
+      ]);
+    }
+  };
+
+  // 录音弹窗保存回调
+  const handleSaveRecording = async (tempUri) => {
+    const idx  = recordSide === 'left' ? 0 : 1;
+    const dest = await saveSoundFromUri(recordSide, tempUri);
+    setTeamSounds((prev) => { const n = [...prev]; n[idx] = dest; return n; });
+    loadPlayer(idx, dest);
+    setRecordSide(null);
   };
 
   const handleNextRound = async () => {
@@ -848,6 +1124,34 @@ export default function App() {
                 </Text>
               </Pressable>
 
+              {/* ── 加分音效开关 ── */}
+              <Pressable
+                onPress={toggleSound}
+                style={[styles.voiceBtn, soundOn && styles.voiceBtnOn]}
+              >
+                <Text style={[styles.voiceBtnText, soundOn && styles.voiceBtnTextOn]}>
+                  {soundOn ? '🔊 加分音效：开' : '🔈 加分音效：关'}
+                </Text>
+              </Pressable>
+
+              {/* ── 加分音效设置区 (一排, 主队/客队各一段) ── */}
+              <View style={styles.bgImageDivider} />
+              <Text style={styles.bgImageSectionLabel}>加分音效</Text>
+              <View style={styles.bgImageRow}>
+                <BgImageBtn
+                  label="主队"
+                  color="#3b82f6"
+                  hasImage={!!teamSounds[0]}
+                  onPress={() => { h.light(); handleSoundBtn('left'); }}
+                />
+                <BgImageBtn
+                  label="客队"
+                  color="#f97316"
+                  hasImage={!!teamSounds[1]}
+                  onPress={() => { h.light(); handleSoundBtn('right'); }}
+                />
+              </View>
+
               {/* ── 背景图设置区 (一排) ── */}
               <View style={styles.bgImageDivider} />
               <Text style={styles.bgImageSectionLabel}>背景图</Text>
@@ -928,6 +1232,18 @@ export default function App() {
         />
       )}
         </>
+      )}
+
+      {/* 录音弹窗: 录制/重录队伍加分音效 */}
+      {recordSide && (
+        <SoundRecordModal
+          side={recordSide}
+          teamName={teamNames[recordSide === 'left' ? 0 : 1]}
+          color={recordSide === 'left' ? '#3b82f6' : '#f97316'}
+          recorder={recorder}
+          onSave={handleSaveRecording}
+          onClose={() => setRecordSide(null)}
+        />
       )}
 
       {/* 分享卡: 屏幕外渲染, 截图时由 shareCardRef 捕获 (始终渲染, 不受 showHistory 影响) */}
@@ -1069,6 +1385,22 @@ const styles = StyleSheet.create({
                    overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.42)',
                    shadowColor: '#000', shadowOffset: { width: 0, height: 16 }, shadowOpacity: 0.4, shadowRadius: 32, elevation: 12 },
   modalContentLandscape: { padding: 14, gap: 8, borderRadius: 16, minWidth: 220 },
+  // 录音弹窗
+  recordCard:    { borderRadius: 22, overflow: 'hidden', minWidth: 280, maxWidth: 340,
+                   shadowColor: '#000', shadowOffset: { width: 0, height: 16 }, shadowOpacity: 0.4, shadowRadius: 32, elevation: 12 },
+  recordContent: { padding: 24, alignItems: 'center', gap: 14 },
+  recordTitle:   { fontSize: 16, fontWeight: '700', letterSpacing: 1 },
+  recordTimer:   { fontSize: 13, color: GLASS.textMuted, textAlign: 'center' },
+  recordRow:     { flexDirection: 'row', gap: 10, width: '100%' },
+  recordBtn:     { width: '100%', paddingVertical: 12, borderRadius: 12, alignItems: 'center', borderWidth: 1 },
+  recordBtnHalf: { flex: 1, width: undefined },
+  recordBtnStart:{ backgroundColor: GLASS.iOSGreen, borderColor: 'rgba(52,199,89,0.4)' },
+  recordBtnStop: { backgroundColor: GLASS.iOSRed, borderColor: 'rgba(255,69,58,0.4)' },
+  recordBtnSave: { backgroundColor: GLASS.iOSGreen, borderColor: 'rgba(52,199,89,0.4)' },
+  recordBtnGlass:{ backgroundColor: GLASS.btnGlass, borderColor: GLASS.btnGlassBorder },
+  recordBtnText: { color: GLASS.textOnGlass, fontSize: 14, fontWeight: '700', letterSpacing: 1 },
+  recordCancel:  { paddingVertical: 6, paddingHorizontal: 16, marginTop: 2 },
+  recordCancelText: { color: GLASS.textMuted, fontSize: 13 },
   // 弹窗玻璃分层
   modalBackdrop:     { backgroundColor: 'transparent' },
   modalGlassFill:    { backgroundColor: GLASS.glassFillDeep, borderRadius: 22 },

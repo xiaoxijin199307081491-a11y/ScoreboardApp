@@ -27,7 +27,13 @@
           "photosPermission": "允许记分板访问您的相册来设置队伍背景图"
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "允许记分板使用麦克风来录制队伍加分音效"
+        }
+      ]
     ],
     "extra": {
       "eas": {
