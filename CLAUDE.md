@@ -334,7 +334,7 @@ style={bgImageHeight
 - 中间一个圆点 (r=3) 作为分隔/焦点
 - 笔画白色渐变 (`#FFFFFF → #CBD5E1`)
 
-**设计原则** (对比 Comet / Grok / 剪映 / Perplexity): 单一焦点 + 大量留白, 笔画适中。
+**设计**: 由 Gemini AI 生成 SVG；原则 — 单一焦点 + 大量留白，笔画适中。
 
 **生成**: 用 sharp 从 `assets/gemini-svg.svg` 生成 48/72/96/144/192 px PNG, 删除同名 .webp。
 
