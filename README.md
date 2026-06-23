@@ -111,7 +111,6 @@ npx expo run:ios
 | 系统 | `expo-haptics`（震动）· `expo-file-system` v56（class API）· `expo-sharing` |
 | 存储 | `@react-native-async-storage/async-storage` |
 | 截图 | `react-native-view-shot` |
-| 云构建 | EAS Build（配置在 `eas.json`） |
 
 **无状态管理库，无导航库，无 CSS-in-JS，无 Tailwind。** 只有 `useState` 和一个超长 `StyleSheet`。整个 App 装在一个 1700 行的 `App.js` 里——一个屏幕嘛，分文件没意义。
 
@@ -123,12 +122,10 @@ npx expo run:ios
 ScoreboardApp/
 ├── App.js              # 整个 App — 计分、计时、历史、分享、主题、弹窗
 ├── app.json            # Expo 配置（包名、图标、权限文案）
-├── eas.json            # EAS 云构建 profile
 ├── package.json
 ├── assets/
 │   ├── icon.png        # App 图标（记分牌 2:2 风格）
-│   ├── gemini-svg.svg  # 图标源文件
-│   └── sounds/         # 内置备用音效
+│   └── gemini-svg.svg  # 图标源文件
 ├── android/            # prebuild 生成的 Android 原生工程
 ├── ios/                # prebuild 生成的 iOS 原生工程
 ├── CLAUDE.md           # 写给 AI 的项目笔记
@@ -157,5 +154,3 @@ MIT — 详见 [LICENSE](LICENSE)。
 ## 致谢
 
 - [Expo](https://expo.dev) — 让 RN 原生项目从「配置地狱」变成 `npx expo start`
-- 5 个内置音效来自 [Pixabay](https://pixabay.com) 公共素材
-- 应用图标设计灵感来自「单一焦点 + 大量留白」的极简风格
