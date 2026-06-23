@@ -7,7 +7,7 @@
 ## 快速开始
 
 ```bash
-cd /Users/xiaoxijin/ScoreboardApp
+cd /Users/xiaoxijin/项目/ScoreboardApp
 npx expo start
 ```
 
@@ -22,7 +22,7 @@ npx expo start
 export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
 export ANDROID_HOME=~/Library/Android/sdk
 
-cd /Users/xiaoxijin/ScoreboardApp
+cd /Users/xiaoxijin/项目/ScoreboardApp
 # 仅当 android/ 缺失或需要重新生成时执行
 # npx expo prebuild --platform android --clean
 
@@ -38,14 +38,6 @@ APK 位置：
 - prebuild 会写 `screenOrientation="auto"`, 在 Android 14 无效, 改为 `"unspecified"`
 - mipmap 目录下的 `.webp` 会优先于 `.png`, 重新生成图标后必须删除
 - 图标用 sharp 从 `assets/gemini-svg.svg` 生成各尺寸 PNG
-
-### EAS 云构建
-```bash
-eas login
-cd /Users/xiaoxijin/ScoreboardApp
-eas project:init --force
-eas build --platform android --profile preview --no-wait
-```
 
 ## 关键依赖
 

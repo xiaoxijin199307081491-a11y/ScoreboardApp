@@ -1,9 +1,0 @@
-*.apk
-*.ipa
-*.aab
-node_modules
-.expo
-android
-ios
-.git
-*.log
